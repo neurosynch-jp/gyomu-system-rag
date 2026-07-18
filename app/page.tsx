@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -7,19 +7,55 @@ type Source = { title: string; url: string };
 
 export default function Home() {
   const [q, setQ] = useState('');
-  const [answer, setAnswer] = useState('');
+  const [displayed, setDisplayed] = useState('');   // 画面に表示中のテキスト
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false); // 受信中フラグ
   const [error, setError] = useState('');
 
-async function ask() {
+  const fullTextRef = useRef('');        // 受信済みの全文（再レンダリングを起こさない）
+  const displayedLenRef = useRef(0);     // 何文字まで表示したか
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // タイプライター：一定間隔で表示を受信済みに追いつかせる
+  function startTypewriter() {
+    if (timerRef.current) return;
+    timerRef.current = setInterval(() => {
+      const full = fullTextRef.current;
+      if (displayedLenRef.current < full.length) {
+        // 1回に数文字進める（速さはここで調整）
+        const step = Math.max(1, Math.ceil((full.length - displayedLenRef.current) / 40));
+        displayedLenRef.current = Math.min(full.length, displayedLenRef.current + step);
+        setDisplayed(full.slice(0, displayedLenRef.current));
+      } else if (!streamingRef.current) {
+        // 受信が終わり、表示も追いついたら停止
+        stopTypewriter();
+      }
+    }, 20); // 20msごと。小さいほど速い
+  }
+  function stopTypewriter() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  // streaming の最新値を timer 内から参照するための ref
+  const streamingRef = useRef(false);
+  useEffect(() => { streamingRef.current = streaming; }, [streaming]);
+  useEffect(() => () => stopTypewriter(), []); // アンマウント時に掃除
+
+  async function ask() {
     const question = q.trim();
     if (!question || loading) return;
 
     setLoading(true);
+    setStreaming(true);
     setError('');
-    setAnswer('');
+    setDisplayed('');
     setSources([]);
+    fullTextRef.current = '';
+    displayedLenRef.current = 0;
 
     try {
       const res = await fetch('/api/ask', {
@@ -28,14 +64,15 @@ async function ask() {
         body: JSON.stringify({ question }),
       });
 
-      // エラー（429/400など）はJSONで返る想定なので先に判定
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'エラーが発生しました。時間をおいて再度お試しください。');
+        setStreaming(false);
         return;
       }
 
-      // ストリームを1行ずつ読む
+      startTypewriter(); // 表示ループ開始
+
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -45,7 +82,6 @@ async function ask() {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
-        // 改行で区切って、完成した行だけ処理（最後の未完成行はbufferに残す）
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
 
@@ -55,7 +91,7 @@ async function ask() {
           if (msg.type === 'sources') {
             setSources(msg.sources ?? []);
           } else if (msg.type === 'text') {
-            setAnswer((prev) => prev + msg.text); // 差分を継ぎ足していく
+            fullTextRef.current += msg.text; // 受信は ref に溜めるだけ
           } else if (msg.type === 'error') {
             setError(msg.error);
           }
@@ -64,11 +100,11 @@ async function ask() {
     } catch {
       setError('通信に失敗しました。ネットワークを確認して再度お試しください。');
     } finally {
+      setStreaming(false);
       setLoading(false);
     }
   }
 
-  // Enterで送信（Shift+Enterは改行）
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -85,7 +121,6 @@ async function ask() {
         </p>
       </header>
 
-      {/* 入力エリア */}
       <div className="flex flex-col gap-2">
         <textarea
           value={q}
@@ -110,30 +145,27 @@ async function ask() {
         </div>
       </div>
 
-      {/* エラー表示 */}
       {error && (
         <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {/* ローディング */}
-      {loading && !loading && (
-        <div className="mt-6 flex items-center gap-2 text-sm text-slate-500">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
-          記事を検索して回答を作成しています…
-        </div>
-      )}
-
-      {/* 回答 */}
-      {answer && (
+      {(loading || displayed) && !error && (
         <section className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="prose prose-slate prose-sm max-w-none text-slate-800
-                prose-a:text-blue-600 prose-a:underline prose-headings:font-bold">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
-          </div>
+          {loading && !displayed ? (
+            <div className="flex items-center gap-2 text-sm text-slate-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+              記事を検索して回答を作成しています…
+            </div>
+          ) : (
+            <div className="prose prose-slate prose-sm max-w-none text-slate-800
+                            prose-a:text-blue-600 prose-a:underline prose-headings:font-bold">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayed}</ReactMarkdown>
+            </div>
+          )}
 
-          {sources.length > 0 && (
+          {sources.length > 0 && displayed && (
             <div className="mt-5 border-t border-slate-100 pt-4">
               <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
                 参照した記事
