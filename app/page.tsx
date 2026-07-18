@@ -117,7 +117,7 @@ export default function Home() {
       <header className="mb-6">
         <h1 className="text-2xl font-bold text-slate-800">業務システム.com AI検索</h1>
         <p className="mt-1 text-sm text-slate-500">
-          記事の内容について質問できます。回答には参照した記事のリンクが付きます。
+          サイト内の記事をAIが検索して回答します。回答には参照した記事のリンクが付きます。
         </p>
       </header>
 

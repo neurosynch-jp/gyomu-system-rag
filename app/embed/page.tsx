@@ -86,7 +86,7 @@ export default function Embed() {
       {/* ヘッダー */}
       <div className="shrink-0 border-b border-slate-200 px-4 py-3">
         <p className="text-sm font-semibold text-slate-800">業務システム.com AI検索</p>
-        <p className="text-xs text-slate-400">記事の内容について質問できます</p>
+        <p className="text-xs text-slate-400">サイト内の記事をAIが検索して回答します</p>
       </div>
 
       {/* 回答エリア（スクロール） */}
