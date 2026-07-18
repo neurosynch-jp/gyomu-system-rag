@@ -12,7 +12,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  async function ask() {
+async function ask() {
     const question = q.trim();
     if (!question || loading) return;
 
@@ -27,15 +27,40 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
       });
-      const data = await res.json();
 
+      // エラー（429/400など）はJSONで返る想定なので先に判定
       if (!res.ok) {
-        // レート制限(429)・入力エラー(400)などのメッセージを表示
+        const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'エラーが発生しました。時間をおいて再度お試しください。');
         return;
       }
-      setAnswer(data.answer ?? '');
-      setSources(data.sources ?? []);
+
+      // ストリームを1行ずつ読む
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // 改行で区切って、完成した行だけ処理（最後の未完成行はbufferに残す）
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.type === 'sources') {
+            setSources(msg.sources ?? []);
+          } else if (msg.type === 'text') {
+            setAnswer((prev) => prev + msg.text); // 差分を継ぎ足していく
+          } else if (msg.type === 'error') {
+            setError(msg.error);
+          }
+        }
+      }
     } catch {
       setError('通信に失敗しました。ネットワークを確認して再度お試しください。');
     } finally {
@@ -93,7 +118,7 @@ export default function Home() {
       )}
 
       {/* ローディング */}
-      {loading && (
+      {loading && !loading && (
         <div className="mt-6 flex items-center gap-2 text-sm text-slate-500">
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
           記事を検索して回答を作成しています…
@@ -101,7 +126,7 @@ export default function Home() {
       )}
 
       {/* 回答 */}
-      {answer && !loading && (
+      {answer && (
         <section className="mt-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="prose prose-slate prose-sm max-w-none text-slate-800
                 prose-a:text-blue-600 prose-a:underline prose-headings:font-bold">
